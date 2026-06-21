@@ -13,51 +13,75 @@ body{
     padding:20px;
 }
 
+label{
+    display:block;
+    margin-top:15px;
+}
+
 input[type=range]{
     width:100%;
 }
 
-#status{
-    margin-top:20px;
-    font-size:20px;
+.value{
     font-weight:bold;
 }
 
-#level{
+#status{
+    margin-top:20px;
+    font-size:18px;
+}
+
+#meter{
+    width:100%;
     height:30px;
     background:#ddd;
-    margin-top:10px;
+    margin-top:15px;
 }
 
 #fill{
-    height:100%;
     width:0%;
-    background:green;
+    height:100%;
+    background:#4caf50;
+}
+
+button{
+    padding:10px 20px;
+    font-size:16px;
 }
 </style>
 </head>
 
 <body>
 
-<h2>Bass-Taschenlampe</h2>
+<h2>Bass Flashlight</h2>
 
 <button id="startBtn">Start</button>
 
-<p>Beat-Empfindlichkeit</p>
-<input id="sensitivity" type="range"
-       min="1.1" max="3"
-       step="0.05" value="1.5">
+<label>
+Maximale Bassfrequenz:
+<span id="freqValue" class="value">150 Hz</span>
+<input id="freqSlider" type="range" min="40" max="500" value="150">
+</label>
 
-<p>
-Faktor:
-<span id="sensValue">1.5</span>
-</p>
+<label>
+Top-Prozent die blinken:
+<span id="percentValue" class="value">10 %</span>
+<input id="percentSlider" type="range" min="1" max="50" value="10">
+</label>
 
-<div id="level">
+<label>
+Blitzdauer:
+<span id="flashValue" class="value">80 ms</span>
+<input id="flashSlider" type="range" min="10" max="500" value="80">
+</label>
+
+<div id="meter">
     <div id="fill"></div>
 </div>
 
-<div id="status">Bereit</div>
+<div id="status">
+Bereit
+</div>
 
 <script>
 
@@ -66,18 +90,26 @@ let analyser;
 let freqData;
 let torchTrack;
 
-let avgBass = 0;
-let lastBeatTime = 0;
+let history = [];
+let torchBusy = false;
 
-const cooldown = 120;
+const HISTORY_SIZE = 300;
 
-const sensitivitySlider =
-    document.getElementById("sensitivity");
+const freqSlider = document.getElementById("freqSlider");
+const percentSlider = document.getElementById("percentSlider");
+const flashSlider = document.getElementById("flashSlider");
 
-sensitivitySlider.addEventListener("input",()=>{
-    document.getElementById("sensValue").innerText =
-        sensitivitySlider.value;
-});
+freqSlider.oninput = () =>
+    document.getElementById("freqValue").innerText =
+    freqSlider.value + " Hz";
+
+percentSlider.oninput = () =>
+    document.getElementById("percentValue").innerText =
+    percentSlider.value + " %";
+
+flashSlider.oninput = () =>
+    document.getElementById("flashValue").innerText =
+    flashSlider.value + " ms";
 
 async function setTorch(state){
 
@@ -85,122 +117,164 @@ async function setTorch(state){
 
     try{
         await torchTrack.applyConstraints({
-            advanced:[{torch:state}]
+            advanced:[{
+                torch:state
+            }]
         });
-    }catch(e){
-        console.log(e);
     }
+    catch(e){}
 }
 
 async function flashTorch(){
 
+    if(torchBusy) return;
+
+    torchBusy = true;
+
+    const duration =
+        Number(flashSlider.value);
+
     await setTorch(true);
 
-    setTimeout(()=>{
-        setTorch(false);
-    },50);
+    setTimeout(async ()=>{
+
+        await setTorch(false);
+
+        torchBusy = false;
+
+    }, duration);
 }
 
 async function start(){
 
-    const mic =
+    document.getElementById("status").innerText =
+        "Starte...";
+
+    const micStream =
         await navigator.mediaDevices.getUserMedia({
             audio:true
         });
 
-    const cam =
+    const camStream =
         await navigator.mediaDevices.getUserMedia({
             video:{
                 facingMode:"environment"
             }
         });
 
-    torchTrack = cam.getVideoTracks()[0];
+    torchTrack =
+        camStream.getVideoTracks()[0];
 
-    audioContext = new AudioContext();
+    audioContext =
+        new AudioContext({
+            latencyHint:"interactive"
+        });
+
+    analyser =
+        audioContext.createAnalyser();
+
+    analyser.fftSize = 256;
+    analyser.smoothingTimeConstant = 0;
+
+    freqData =
+        new Uint8Array(
+            analyser.frequencyBinCount
+        );
 
     const source =
-        audioContext.createMediaStreamSource(mic);
-
-    analyser = audioContext.createAnalyser();
-
-    analyser.fftSize = 2048;
-    analyser.smoothingTimeConstant = 0.7;
+        audioContext.createMediaStreamSource(
+            micStream
+        );
 
     source.connect(analyser);
 
-    freqData =
-        new Uint8Array(analyser.frequencyBinCount);
+    document.getElementById("status").innerText =
+        "Läuft";
 
-    detectBass();
+    analyze();
 }
 
-function detectBass(){
+function analyze(){
 
     analyser.getByteFrequencyData(freqData);
 
     const sampleRate =
         audioContext.sampleRate;
 
-    const fftSize =
-        analyser.fftSize;
+    const maxFreq =
+        Number(freqSlider.value);
 
-    const bassStart =
-        Math.floor(40 * fftSize / sampleRate);
-
-    const bassEnd =
-        Math.floor(180 * fftSize / sampleRate);
+    const maxBin =
+        Math.max(
+            1,
+            Math.floor(
+                maxFreq *
+                analyser.fftSize /
+                sampleRate
+            )
+        );
 
     let bassEnergy = 0;
-    let count = 0;
 
-    for(let i=bassStart;i<=bassEnd;i++){
+    for(let i=0;i<maxBin;i++){
         bassEnergy += freqData[i];
-        count++;
     }
 
-    bassEnergy /= count;
+    history.push(bassEnergy);
 
-    avgBass = avgBass * 0.98 +
-              bassEnergy * 0.02;
-
-    const factor =
-        parseFloat(sensitivitySlider.value);
-
-    const threshold =
-        avgBass * factor;
-
-    const now = performance.now();
-
-    if(
-        bassEnergy > threshold &&
-        now - lastBeatTime > cooldown
-    ){
-
-        lastBeatTime = now;
-
-        flashTorch();
-
-        document.getElementById("status")
-            .innerText =
-            "BEAT erkannt";
+    if(history.length > HISTORY_SIZE){
+        history.shift();
     }
+
+    if(history.length > 50){
+
+        const sorted =
+            [...history].sort(
+                (a,b)=>a-b
+            );
+
+        const topPercent =
+            Number(percentSlider.value);
+
+        const percentile =
+            1 - topPercent / 100;
+
+        const threshold =
+            sorted[
+                Math.floor(
+                    sorted.length *
+                    percentile
+                )
+            ];
+
+        if(bassEnergy > threshold){
+            flashTorch();
+        }
+    }
+
+    const maxDisplay =
+        Math.max(...history,1);
 
     const percent =
         Math.min(
             100,
-            bassEnergy / 2
+            bassEnergy /
+            maxDisplay *
+            100
         );
 
     document.getElementById("fill")
         .style.width =
         percent + "%";
 
-    requestAnimationFrame(detectBass);
+    requestAnimationFrame(analyze);
 }
 
 document.getElementById("startBtn")
-    .addEventListener("click", start);
+    .addEventListener(
+        "click",
+        start
+    );
 
 </script>
 

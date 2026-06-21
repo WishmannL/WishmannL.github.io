@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Beat Flashlight</title>
+
+<style>
+body{
+    font-family: Arial,sans-serif;
+    max-width:600px;
+    margin:auto;
+    padding:20px;
+}
+
+input[type=range]{
+    width:100%;
+}
+
+#status{
+    margin-top:20px;
+    font-size:20px;
+    font-weight:bold;
+}
+</style>
+</head>
+
+<body>
+
+<h2>Beat Flashlight</h2>
+
+<button id="startBtn">Start</button>
+
+<p>
+Empfindlichkeit / An-Aus Verhältnis:
+</p>
+
+<input id="threshold" type="range" min="0.01" max="0.5" step="0.01" value="0.15">
+
+<p>
+Schwellwert: <span id="thValue">0.15</span>
+</p>
+
+<div id="status">Aus</div>
+
+<script>
+
+let audioContext;
+let analyser;
+let dataArray;
+let torchTrack;
+let torchState = false;
+
+const slider = document.getElementById("threshold");
+const thValue = document.getElementById("thValue");
+
+slider.addEventListener("input",()=>{
+    thValue.innerText = slider.value;
+});
+
+async function setTorch(state){
+
+    if(!torchTrack) return;
+
+    if(state === torchState) return;
+
+    try{
+        await torchTrack.applyConstraints({
+            advanced:[{torch:state}]
+        });
+
+        torchState = state;
+        document.getElementById("status").innerText =
+            state ? "Licht AN" : "Licht AUS";
+
+    }catch(e){
+        console.log(e);
+    }
+}
+
+async function start(){
+
+    // Mikrofon
+    const micStream = await navigator.mediaDevices.getUserMedia({
+        audio:true
+    });
+
+    // Kamera mit Torch
+    const camStream = await navigator.mediaDevices.getUserMedia({
+        video:{
+            facingMode:"environment"
+        }
+    });
+
+    torchTrack = camStream.getVideoTracks()[0];
+
+    audioContext = new AudioContext();
+
+    const source =
+        audioContext.createMediaStreamSource(micStream);
+
+    analyser = audioContext.createAnalyser();
+
+    analyser.fftSize = 1024;
+
+    source.connect(analyser);
+
+    dataArray = new Uint8Array(analyser.frequencyBinCount);
+
+    detectBeat();
+}
+
+function detectBeat(){
+
+    analyser.getByteTimeDomainData(dataArray);
+
+    let sum = 0;
+
+    for(let i=0;i<dataArray.length;i++){
+
+        let v = (dataArray[i]-128)/128;
+
+        sum += v*v;
+    }
+
+    let rms = Math.sqrt(sum/dataArray.length);
+
+    let threshold = parseFloat(slider.value);
+
+    if(rms > threshold){
+        setTorch(true);
+    }else{
+        setTorch(false);
+    }
+
+    requestAnimationFrame(detectBeat);
+}
+
+document.getElementById("startBtn")
+    .addEventListener("click", start);
+
+</script>
+
+</body>
+</html>

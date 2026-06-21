@@ -1,13 +1,14 @@
 <!DOCTYPE html>
-<html>
+<html lang="de">
 <head>
 <meta charset="UTF-8">
-<title>Beat Flashlight</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Bass Flashlight</title>
 
 <style>
 body{
-    font-family: Arial,sans-serif;
-    max-width:600px;
+    font-family:Arial,sans-serif;
+    max-width:700px;
     margin:auto;
     padding:20px;
 }
@@ -21,118 +22,181 @@ input[type=range]{
     font-size:20px;
     font-weight:bold;
 }
+
+#level{
+    height:30px;
+    background:#ddd;
+    margin-top:10px;
+}
+
+#fill{
+    height:100%;
+    width:0%;
+    background:green;
+}
 </style>
 </head>
 
 <body>
 
-<h2>Beat Flashlight</h2>
+<h2>Bass-Taschenlampe</h2>
 
 <button id="startBtn">Start</button>
 
+<p>Beat-Empfindlichkeit</p>
+<input id="sensitivity" type="range"
+       min="1.1" max="3"
+       step="0.05" value="1.5">
+
 <p>
-Empfindlichkeit / An-Aus Verhältnis:
+Faktor:
+<span id="sensValue">1.5</span>
 </p>
 
-<input id="threshold" type="range" min="0.01" max="0.5" step="0.01" value="0.15">
+<div id="level">
+    <div id="fill"></div>
+</div>
 
-<p>
-Schwellwert: <span id="thValue">0.15</span>
-</p>
-
-<div id="status">Aus</div>
+<div id="status">Bereit</div>
 
 <script>
 
 let audioContext;
 let analyser;
-let dataArray;
+let freqData;
 let torchTrack;
-let torchState = false;
 
-const slider = document.getElementById("threshold");
-const thValue = document.getElementById("thValue");
+let avgBass = 0;
+let lastBeatTime = 0;
 
-slider.addEventListener("input",()=>{
-    thValue.innerText = slider.value;
+const cooldown = 120;
+
+const sensitivitySlider =
+    document.getElementById("sensitivity");
+
+sensitivitySlider.addEventListener("input",()=>{
+    document.getElementById("sensValue").innerText =
+        sensitivitySlider.value;
 });
 
 async function setTorch(state){
 
     if(!torchTrack) return;
 
-    if(state === torchState) return;
-
     try{
         await torchTrack.applyConstraints({
             advanced:[{torch:state}]
         });
-
-        torchState = state;
-        document.getElementById("status").innerText =
-            state ? "Licht AN" : "Licht AUS";
-
     }catch(e){
         console.log(e);
     }
 }
 
+async function flashTorch(){
+
+    await setTorch(true);
+
+    setTimeout(()=>{
+        setTorch(false);
+    },50);
+}
+
 async function start(){
 
-    // Mikrofon
-    const micStream = await navigator.mediaDevices.getUserMedia({
-        audio:true
-    });
+    const mic =
+        await navigator.mediaDevices.getUserMedia({
+            audio:true
+        });
 
-    // Kamera mit Torch
-    const camStream = await navigator.mediaDevices.getUserMedia({
-        video:{
-            facingMode:"environment"
-        }
-    });
+    const cam =
+        await navigator.mediaDevices.getUserMedia({
+            video:{
+                facingMode:"environment"
+            }
+        });
 
-    torchTrack = camStream.getVideoTracks()[0];
+    torchTrack = cam.getVideoTracks()[0];
 
     audioContext = new AudioContext();
 
     const source =
-        audioContext.createMediaStreamSource(micStream);
+        audioContext.createMediaStreamSource(mic);
 
     analyser = audioContext.createAnalyser();
 
-    analyser.fftSize = 1024;
+    analyser.fftSize = 2048;
+    analyser.smoothingTimeConstant = 0.7;
 
     source.connect(analyser);
 
-    dataArray = new Uint8Array(analyser.frequencyBinCount);
+    freqData =
+        new Uint8Array(analyser.frequencyBinCount);
 
-    detectBeat();
+    detectBass();
 }
 
-function detectBeat(){
+function detectBass(){
 
-    analyser.getByteTimeDomainData(dataArray);
+    analyser.getByteFrequencyData(freqData);
 
-    let sum = 0;
+    const sampleRate =
+        audioContext.sampleRate;
 
-    for(let i=0;i<dataArray.length;i++){
+    const fftSize =
+        analyser.fftSize;
 
-        let v = (dataArray[i]-128)/128;
+    const bassStart =
+        Math.floor(40 * fftSize / sampleRate);
 
-        sum += v*v;
+    const bassEnd =
+        Math.floor(180 * fftSize / sampleRate);
+
+    let bassEnergy = 0;
+    let count = 0;
+
+    for(let i=bassStart;i<=bassEnd;i++){
+        bassEnergy += freqData[i];
+        count++;
     }
 
-    let rms = Math.sqrt(sum/dataArray.length);
+    bassEnergy /= count;
 
-    let threshold = parseFloat(slider.value);
+    avgBass = avgBass * 0.98 +
+              bassEnergy * 0.02;
 
-    if(rms > threshold){
-        setTorch(true);
-    }else{
-        setTorch(false);
+    const factor =
+        parseFloat(sensitivitySlider.value);
+
+    const threshold =
+        avgBass * factor;
+
+    const now = performance.now();
+
+    if(
+        bassEnergy > threshold &&
+        now - lastBeatTime > cooldown
+    ){
+
+        lastBeatTime = now;
+
+        flashTorch();
+
+        document.getElementById("status")
+            .innerText =
+            "BEAT erkannt";
     }
 
-    requestAnimationFrame(detectBeat);
+    const percent =
+        Math.min(
+            100,
+            bassEnergy / 2
+        );
+
+    document.getElementById("fill")
+        .style.width =
+        percent + "%";
+
+    requestAnimationFrame(detectBass);
 }
 
 document.getElementById("startBtn")
